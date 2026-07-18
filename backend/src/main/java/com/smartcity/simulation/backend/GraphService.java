@@ -2,15 +2,19 @@ package com.smartcity.simulation.backend;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import jakarta.annotation.PostConstruct;
 
-import java.io.File;
 import java.io.IOException;
 import java.util.*;
 
 @Service
 public class GraphService {
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
 
     public static class Node {
         public double lng;
@@ -55,22 +59,32 @@ public class GraphService {
     private final Map<String, Node> nodeMap = new HashMap<>();
 
     @PostConstruct
-    public void init() throws IOException {
-        ObjectMapper mapper = new ObjectMapper();
-        // Path relative to backend-simulation running dir
-        File file = new File("../frontend/src/data/mockRoads.json");
-        JsonNode root = mapper.readTree(file);
+    public void init() {
+        System.out.println("Initializing Graph from PostGIS...");
+        String query = "SELECT ST_AsGeoJSON(ST_Transform(way, 4326)) AS geojson, name, highway FROM planet_osm_line WHERE highway IS NOT NULL";
+        
+        try {
+            List<Map<String, Object>> rows = jdbcTemplate.queryForList(query);
+            ObjectMapper mapper = new ObjectMapper();
 
-        JsonNode features = root.path("features");
-        for (JsonNode feature : features) {
-            if ("LineString".equals(feature.path("geometry").path("type").asText())) {
-                JsonNode coordinates = feature.path("geometry").path("coordinates");
-                for (int i = 0; i < coordinates.size() - 1; i++) {
-                    Node u = new Node(coordinates.get(i).get(0).asDouble(), coordinates.get(i).get(1).asDouble());
-                    Node v = new Node(coordinates.get(i+1).get(0).asDouble(), coordinates.get(i+1).get(1).asDouble());
-                    addEdge(u, v, getDistance(u, v));
+            for (Map<String, Object> row : rows) {
+                String geojsonStr = (String) row.get("geojson");
+                if (geojsonStr == null) continue;
+
+                JsonNode geometry = mapper.readTree(geojsonStr);
+                if ("LineString".equals(geometry.path("type").asText())) {
+                    JsonNode coordinates = geometry.path("coordinates");
+                    for (int i = 0; i < coordinates.size() - 1; i++) {
+                        Node u = new Node(coordinates.get(i).get(0).asDouble(), coordinates.get(i).get(1).asDouble());
+                        Node v = new Node(coordinates.get(i+1).get(0).asDouble(), coordinates.get(i+1).get(1).asDouble());
+                        addEdge(u, v, getDistance(u, v));
+                    }
                 }
             }
+            System.out.println("Graph initialization complete. Nodes: " + nodes.size() + ", Edges: " + adjacencyList.size());
+        } catch (Exception e) {
+            System.err.println("Failed to initialize graph from PostGIS: " + e.getMessage());
+            e.printStackTrace();
         }
     }
 

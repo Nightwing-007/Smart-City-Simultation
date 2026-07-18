@@ -4,8 +4,10 @@ import pandas as pd
 import os
 
 def generate_data():
-    # Load mockRoads.json
-    mock_roads_path = os.path.join("..", "frontend", "src", "data", "mockRoads.json")
+    # Load mockRoads.json (Check local first for Docker, then relative path)
+    mock_roads_path = "mockRoads.json"
+    if not os.path.exists(mock_roads_path):
+        mock_roads_path = os.path.join("..", "frontend", "src", "data", "mockRoads.json")
     with open(mock_roads_path, "r") as f:
         data = json.load(f)
     

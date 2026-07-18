@@ -1,5 +1,9 @@
 version: '3.8'
 
+networks:
+  smartcity-net:
+    driver: bridge
+
 services:
   db:
     image: postgis/postgis:latest
@@ -10,3 +14,54 @@ services:
       POSTGRES_DB: citytwin
     ports:
       - "5432:5432"
+    networks:
+      - smartcity-net
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  node-api:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: citytwin-node-api
+    ports:
+      - "3000:3000"
+    networks:
+      - smartcity-net
+    depends_on:
+      - db
+
+  backend-sim:
+    build: 
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: citytwin-backend-sim
+    ports:
+      - "8082:8082"
+    networks:
+      - smartcity-net
+    depends_on:
+      - db
+
+  ai-oracle:
+    build: 
+      context: .
+      dockerfile: ai-oracle/Dockerfile
+    container_name: citytwin-ai-oracle
+    ports:
+      - "8000:8000"
+    networks:
+      - smartcity-net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: citytwin-frontend
+    ports:
+      - "80:80"
+    networks:
+      - smartcity-net
+
+volumes:
+  pgdata:

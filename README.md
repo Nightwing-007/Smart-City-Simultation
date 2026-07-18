@@ -33,56 +33,42 @@ The project is built on a modern microservices architecture, spanning three prim
 
 ---
 
-## Setup & Installation
+## Setup & Installation (Docker Ecosystem)
+
+The entire ecosystem is orchestrated using Docker Compose. All services run in isolated containers communicating via a shared internal bridge network (`smartcity-net`), including a live PostGIS instance holding spatial map data.
 
 ### Prerequisites
-- Node.js & npm
-- Java (JDK 17 or higher)
-- Maven
-- Python 3.9+ 
+- [Docker](https://docs.docker.com/get-docker/) & [Docker Compose](https://docs.docker.com/compose/install/)
 
-### 1. Frontend Setup
+### 1. Launch the Cluster
+Navigate to the root directory where the `docker-compose.yml` is located and run:
 ```bash
-cd frontend
-npm install
-npm run dev
-# Runs on http://localhost:5173
+docker-compose up -d --build
 ```
+This builds and launches all 5 core containers:
+- `citytwin-frontend` (Nginx, port 80)
+- `citytwin-backend-sim` (Java 17, port 8082)
+- `citytwin-ai-oracle` (Python 3.10, port 8000)
+- `citytwin-node-api` (Legacy ingestion API, port 3000)
+- `citytwin-db` (PostGIS Database, port 5432)
 
-### 2. Spring Boot Simulation Backend
+### 2. Ingest Real City Data
+The PostGIS container (`citytwin-db`) will boot up empty. You must populate it with OpenStreetMap data using the provided shell script:
 ```bash
-cd backend
-./mvnw clean compile spring-boot:run
-# Runs on http://localhost:8082
+./ingest.sh
 ```
+*Note: This script requires `curl` and utilizes the `iboates/osm2pgsql` docker image to parse a `.pbf` map file into `planet_osm_line` tables directly into the `citytwin-db` container.*
 
-### 3. Python AI Oracle Setup
+### 3. Restart the Simulation
+Because the Spring Boot Java service builds the traversable A* graph memory on application startup (`@PostConstruct`), you need to restart the backend container after data ingestion completes so it can query the populated PostGIS tables:
 ```bash
-cd ai-oracle
-# Create a virtual environment
-python -m venv venv
-
-# Activate (Windows)
-.\venv\Scripts\activate
-# Activate (Mac/Linux)
-# source venv/bin/activate
-
-# Install dependencies
-pip install pandas scikit-learn fastapi uvicorn
-
-# (Optional) Retrain the model
-python generate_data.py
-python train_model.py
-
-# Start the FastAPI server
-uvicorn main:app --port 8000
-# Runs on http://localhost:8000
+docker-compose restart backend-sim
 ```
 
 ## Usage
-Once all three services are running:
-1. Open your browser and navigate to **`http://localhost:5173`**.
+Once the stack is running and the map data is loaded:
+1. Open your browser and navigate to **`http://localhost`**.
 2. Observe the live 3D traffic traversing the map. The red ambulance will actively route around yellow traffic clusters.
 3. Observe the blue-to-red `HeatmapLayer` glowing dynamically over congested intersections.
 4. On the left **Sidebar**, scroll down to the **🔮 AI Oracle: What-If Analysis** panel.
-5. Select a road to simulate a closure. The AI Oracle will instantly return the predicted pollution spike and ambulance delay.
+5. Select a road to simulate a closure. The AI Oracle will instantly return the predicted pollution spike and ambulance delay computed natively via the Machine Learning model.
