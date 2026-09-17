@@ -1,0 +1,55 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [-73.985130, 40.758896],
+          [-73.985530, 40.759296],
+          [-73.986000, 40.760000],
+          [-73.987000, 40.761500]
+        ]
+      },
+      "properties": {
+        "name": "Broadway",
+        "highway": "primary",
+        "color": [79, 172, 254]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [-73.987000, 40.761500],
+          [-73.986500, 40.762000],
+          [-73.985000, 40.762500],
+          [-73.983000, 40.763000]
+        ]
+      },
+      "properties": {
+        "name": "7th Ave",
+        "highway": "secondary",
+        "color": [0, 242, 254]
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [-73.985130, 40.758896],
+          [-73.984000, 40.759500],
+          [-73.983000, 40.760000]
+        ]
+      },
+      "properties": {
+        "name": "42nd St",
+        "highway": "tertiary",
+        "color": [255, 100, 150]
+      }
+    }
+  ]
+}

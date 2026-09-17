@@ -2,12 +2,14 @@ version: '3.8'
 
 networks:
   smartcity-net:
+    name: smartcity-net
     driver: bridge
 
 services:
   db:
-    image: postgis/postgis:latest
+    image: postgis/postgis:15-3.3
     container_name: citytwin-db
+    restart: unless-stopped
     environment:
       POSTGRES_USER: admin
       POSTGRES_PASSWORD: admin
@@ -18,36 +20,56 @@ services:
       - smartcity-net
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d citytwin"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   node-api:
     build: 
       context: .
       dockerfile: Dockerfile
     container_name: citytwin-node-api
+    restart: unless-stopped
     ports:
       - "3000:3000"
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: admin
+      DB_PASSWORD: admin
+      DB_NAME: citytwin
     networks:
       - smartcity-net
     depends_on:
-      - db
+      db:
+        condition: service_healthy
 
   backend-sim:
     build: 
       context: ./backend
       dockerfile: Dockerfile
     container_name: citytwin-backend-sim
+    restart: unless-stopped
     ports:
       - "8082:8082"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/citytwin
+      SPRING_DATASOURCE_USERNAME: admin
+      SPRING_DATASOURCE_PASSWORD: admin
     networks:
       - smartcity-net
     depends_on:
-      - db
+      db:
+        condition: service_healthy
 
   ai-oracle:
     build: 
-      context: .
-      dockerfile: ai-oracle/Dockerfile
+      context: ./ai-oracle
+      dockerfile: Dockerfile
     container_name: citytwin-ai-oracle
+    restart: unless-stopped
     ports:
       - "8000:8000"
     networks:
@@ -58,10 +80,14 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     container_name: citytwin-frontend
+    restart: unless-stopped
     ports:
       - "80:80"
     networks:
       - smartcity-net
+    depends_on:
+      - backend-sim
+      - ai-oracle
 
 volumes:
   pgdata:
