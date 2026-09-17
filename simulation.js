@@ -1,6 +1,9 @@
-const { buildGraph, aStar, getDistance, getSegmentKey, getCoordKey } = require('./graphUtils');
+const { loadGraphFromPostGIS, aStar, getDistance, getSegmentKey, getCoordKey } = require('./graphUtils');
 
-const { adjacencyList, nodes, segments, segmentMap } = buildGraph();
+let adjacencyList = new Map();
+let nodes = [];
+let segments = [];
+let segmentMap = new Map();
 
 class Vehicle {
   constructor(id, isAmbulance = false) {
@@ -11,7 +14,10 @@ class Vehicle {
     this.path = [];
     this.currentEdgeIndex = 0;
     this.position = null;
-    this.assignNewRoute();
+    this.destination = null;
+    if (nodes.length >= 2) {
+      this.assignNewRoute();
+    }
   }
 
   assignNewRoute(densityMap = null) {
@@ -19,10 +25,10 @@ class Vehicle {
 
     let startNode;
     if (this.position) {
-      // Find closest node to current position
       let closest = nodes[0];
       let minDist = getDistance(this.position, closest);
-      for (let i = 1; i < nodes.length; i++) {
+      const searchLimit = Math.min(nodes.length, 200);
+      for (let i = 1; i < searchLimit; i++) {
         const d = getDistance(this.position, nodes[i]);
         if (d < minDist) {
           minDist = d;
@@ -72,14 +78,12 @@ class Vehicle {
     const dist = getDistance(this.position, p2);
 
     if (dist <= this.speedPerTick) {
-      // Node reached
       this.position = [...p2];
       this.currentEdgeIndex++;
       if (this.currentEdgeIndex >= this.path.length - 1) {
         this.assignNewRoute(densityMap);
       }
     } else {
-      // Interpolate along segment
       const ratio = this.speedPerTick / dist;
       this.position[0] += (p2[0] - this.position[0]) * ratio;
       this.position[1] += (p2[1] - this.position[1]) * ratio;
@@ -104,19 +108,36 @@ class Ambulance extends Vehicle {
   }
 }
 
-// Fleet initialization
-const vehicles = Array.from({ length: 50 }, (_, i) => new Vehicle(`v-${i}`, false));
-const ambulance = new Ambulance('ambulance-1');
-
-// Segment traffic density map
+let vehicles = [];
+let ambulance = null;
 const trafficDensity = new Map();
+
+/**
+ * Initializes simulation engine with spatial graph from PostGIS
+ */
+async function initSimulation(pool) {
+  const graph = await loadGraphFromPostGIS(pool);
+  adjacencyList = graph.adjacencyList;
+  nodes = graph.nodes;
+  segments = graph.segments;
+  segmentMap = graph.segmentMap;
+
+  if (nodes.length > 0) {
+    vehicles = Array.from({ length: 50 }, (_, i) => new Vehicle(`v-${i}`, false));
+    ambulance = new Ambulance('ambulance-1');
+  }
+}
+
+/**
+ * Reloads simulation graph from PostGIS tables
+ */
+async function reloadSimulationGraph(pool) {
+  await initSimulation(pool);
+}
 
 /**
  * Pollution calculation function.
  * Calculates scaling pollution index for every road segment where active vehicles exceed the threshold.
- * @param {Map} densityMap - Map of segmentKey -> active vehicle count
- * @param {number} threshold - Minimum vehicles on segment to trigger pollution index (default: 2)
- * @returns {Array} List of pollution intensity objects
  */
 function calculatePollution(densityMap, threshold = 2) {
   const pollutionHotspots = [];
@@ -125,12 +146,8 @@ function calculatePollution(densityMap, threshold = 2) {
     if (count >= threshold) {
       const seg = segmentMap.get(segmentKey);
       if (seg) {
-        // Compute midpoint of the segment as the hotspot coordinate
         const midLng = (seg.u[0] + seg.v[0]) / 2;
         const midLat = (seg.u[1] + seg.v[1]) / 2;
-
-        // Scaling pollution index (proportional to congestion density)
-        // Scaling factor: e.g. 20 index points per vehicle above threshold, max 100
         const pollutionIndex = Math.min(100, Math.round(count * 18));
 
         pollutionHotspots.push({
@@ -149,12 +166,22 @@ function calculatePollution(densityMap, threshold = 2) {
 }
 
 function simulateTick() {
+  if (nodes.length === 0 || vehicles.length === 0) {
+    return {
+      vehicles: [],
+      ambulance: null,
+      ambulancePath: [],
+      pollution: [],
+      activeCongestedSegments: 0,
+      timestamp: Date.now()
+    };
+  }
+
   // 1. Calculate current traffic density across all network segments
   trafficDensity.clear();
+  const allEntities = [...vehicles];
+  if (ambulance) allEntities.push(ambulance);
 
-  const allEntities = [...vehicles, ambulance];
-
-  // Count active vehicles on each segment
   allEntities.forEach((v) => {
     const segKey = v.getCurrentSegmentKey();
     if (segKey) {
@@ -165,7 +192,7 @@ function simulateTick() {
 
   // 2. Advance all regular vehicles & ambulance
   vehicles.forEach((v) => v.tick(trafficDensity));
-  ambulance.tick(trafficDensity);
+  if (ambulance) ambulance.tick(trafficDensity);
 
   // 3. Compute pollution layer based on traffic density
   const pollution = calculatePollution(trafficDensity, 2);
@@ -176,22 +203,24 @@ function simulateTick() {
     lng: v.position ? Number(v.position[0].toFixed(6)) : 0,
     lat: v.position ? Number(v.position[1].toFixed(6)) : 0,
     isAmbulance: false,
-    speed: (v.speedPerTick * 7.2).toFixed(1) // converted to ~mph/kmh scale
+    speed: (v.speedPerTick * 7.2).toFixed(1)
   }));
 
-  // Add ambulance entity
-  const ambulanceData = {
-    id: ambulance.id,
-    lng: ambulance.position ? Number(ambulance.position[0].toFixed(6)) : 0,
-    lat: ambulance.position ? Number(ambulance.position[1].toFixed(6)) : 0,
-    isAmbulance: true,
-    speed: (ambulance.speedPerTick * 7.2).toFixed(1),
-    destination: ambulance.destination
-  };
+  let ambulanceData = null;
+  let ambulancePath = [];
 
-  vehicleData.push(ambulanceData);
-
-  const ambulancePath = ambulance.getRemainingPath();
+  if (ambulance && ambulance.position) {
+    ambulanceData = {
+      id: ambulance.id,
+      lng: Number(ambulance.position[0].toFixed(6)),
+      lat: Number(ambulance.position[1].toFixed(6)),
+      isAmbulance: true,
+      speed: (ambulance.speedPerTick * 7.2).toFixed(1),
+      destination: ambulance.destination
+    };
+    vehicleData.push(ambulanceData);
+    ambulancePath = ambulance.getRemainingPath();
+  }
 
   return {
     vehicles: vehicleData,
@@ -204,11 +233,14 @@ function simulateTick() {
 }
 
 module.exports = {
+  initSimulation,
+  reloadSimulationGraph,
   simulateTick,
   calculatePollution,
   Vehicle,
   Ambulance,
-  vehicles,
-  ambulance,
+  getVehicles: () => vehicles,
+  getAmbulance: () => ambulance,
+  getNodes: () => nodes,
   trafficDensity
 };

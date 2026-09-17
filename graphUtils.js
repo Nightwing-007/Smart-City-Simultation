@@ -1,7 +1,4 @@
-const fs = require('fs');
-const path = require('path');
-
-// Haversine formula to get distance in meters between two [lng, lat] coordinates
+// Haversine formula to get distance in meters between two [lng, lat] EPSG:4326 coordinates
 function getDistance(coord1, coord2) {
   if (!coord1 || !coord2) return 0;
   const R = 6371e3; // metres
@@ -28,7 +25,7 @@ function getSegmentKey(u, v) {
   return uKey < vKey ? `${uKey}<->${vKey}` : `${vKey}<->${uKey}`;
 }
 
-// 2D segment-segment intersection helper
+// 2D segment-segment intersection helper for road mesh creation
 function lineIntersection(p1, p2, p3, p4) {
   const x1 = p1[0], y1 = p1[1], x2 = p2[0], y2 = p2[1];
   const x3 = p3[0], y3 = p3[1], x4 = p4[0], y4 = p4[1];
@@ -46,23 +43,22 @@ function lineIntersection(p1, p2, p3, p4) {
   return null;
 }
 
-function buildGraph(customData = null) {
-  let data = customData;
-  if (!data) {
-    const dataPath = path.join(__dirname, 'frontend', 'src', 'data', 'mockRoads.json');
-    if (fs.existsSync(dataPath)) {
-      data = JSON.parse(fs.readFileSync(dataPath, 'utf8'));
-    } else {
-      data = { type: 'FeatureCollection', features: [] };
-    }
-  }
-
+/**
+ * Builds in-memory graph from raw spatial LineString features
+ */
+function buildGraphFromFeatures(features) {
   const rawSegments = [];
-  if (data && data.features) {
-    data.features.forEach((feature) => {
-      const roadId = feature.id || feature.properties?.id || feature.properties?.name || null;
+  if (features && Array.isArray(features)) {
+    features.forEach((feature) => {
+      const roadId = feature.id || feature.osm_id || feature.name || null;
+      let coords = null;
       if (feature.geometry && feature.geometry.type === 'LineString') {
-        const coords = feature.geometry.coordinates;
+        coords = feature.geometry.coordinates;
+      } else if (feature.coordinates) {
+        coords = feature.coordinates;
+      }
+
+      if (coords && Array.isArray(coords)) {
         for (let i = 0; i < coords.length - 1; i++) {
           rawSegments.push({
             u: coords[i],
@@ -75,9 +71,10 @@ function buildGraph(customData = null) {
     });
   }
 
-  // Find all pairwise segment intersections
-  for (let i = 0; i < rawSegments.length; i++) {
-    for (let j = i + 1; j < rawSegments.length; j++) {
+  // Calculate pairwise segment intersections for realistic road mesh
+  const maxSegmentIntersectionChecks = Math.min(rawSegments.length, 500);
+  for (let i = 0; i < maxSegmentIntersectionChecks; i++) {
+    for (let j = i + 1; j < maxSegmentIntersectionChecks; j++) {
       const res = lineIntersection(
         rawSegments[i].u,
         rawSegments[i].v,
@@ -147,6 +144,61 @@ function buildGraph(customData = null) {
   });
 
   return { adjacencyList, nodes, segments, segmentMap };
+}
+
+/**
+ * Queries PostGIS directly to load real OpenStreetMap road geometries
+ * Transforms PostGIS EPSG:3857 spatial geometries to standard EPSG:4326 lat/lng coordinates
+ * @param {import('pg').Pool} pool - PostgreSQL connection pool
+ * @returns {Promise<{ adjacencyList: Map, nodes: Array, segments: Array, segmentMap: Map }>}
+ */
+async function loadGraphFromPostGIS(pool) {
+  console.log('[GraphService] Querying spatial road network from PostGIS database...');
+
+  // SQL Query transforming PostGIS Web Mercator (EPSG:3857) to standard WGS84 EPSG:4326 coordinates
+  const query = `
+    SELECT 
+      osm_id,
+      name,
+      highway,
+      ST_AsGeoJSON(ST_Transform(way, 4326)) AS geojson
+    FROM planet_osm_line
+    WHERE highway IS NOT NULL AND way IS NOT NULL
+    LIMIT 10000;
+  `;
+
+  try {
+    const result = await pool.query(query);
+    const features = [];
+
+    if (result && result.rows && result.rows.length > 0) {
+      for (const row of result.rows) {
+        if (!row.geojson) continue;
+        const geom = typeof row.geojson === 'string' ? JSON.parse(row.geojson) : row.geojson;
+        if (geom && geom.type === 'LineString' && Array.isArray(geom.coordinates)) {
+          features.push({
+            id: row.osm_id ? String(row.osm_id) : undefined,
+            name: row.name || row.highway,
+            highway: row.highway,
+            geometry: geom
+          });
+        }
+      }
+    }
+
+    if (features.length === 0) {
+      console.warn('[GraphService] Warning: PostGIS table planet_osm_line is empty or unpopulated.');
+      console.warn('[GraphService] Run ./ingest.sh or osm2pgsql container to populate OpenStreetMap data.');
+      return { adjacencyList: new Map(), nodes: [], segments: [], segmentMap: new Map() };
+    }
+
+    const graph = buildGraphFromFeatures(features);
+    console.log(`[GraphService] Spatial Graph successfully loaded from PostGIS. Total Nodes: ${graph.nodes.length}, Segments: ${graph.segments.length}`);
+    return graph;
+  } catch (error) {
+    console.error('[GraphService] Error querying PostGIS database:', error.message);
+    return { adjacencyList: new Map(), nodes: [], segments: [], segmentMap: new Map() };
+  }
 }
 
 /**
@@ -258,7 +310,8 @@ function aStar(start, goal, adjacencyList, trafficDensity = null, options = {}) 
 }
 
 module.exports = {
-  buildGraph,
+  loadGraphFromPostGIS,
+  buildGraphFromFeatures,
   aStar,
   getDistance,
   getCoordKey,

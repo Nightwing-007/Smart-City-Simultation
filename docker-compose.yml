@@ -26,8 +26,23 @@ services:
       timeout: 5s
       retries: 5
 
+  osm-ingest:
+    image: iboates/osm2pgsql:latest
+    container_name: citytwin-osm-ingest
+    networks:
+      - smartcity-net
+    volumes:
+      - ./:/osm
+    depends_on:
+      db:
+        condition: service_healthy
+    entrypoint: ["osm2pgsql"]
+    command: ["-c", "-d", "postgresql://admin:admin@db:5432/citytwin", "/osm/NewYork.osm.pbf"]
+    profiles:
+      - ingest
+
   node-api:
-    build: 
+    build:
       context: .
       dockerfile: Dockerfile
     container_name: citytwin-node-api
@@ -40,6 +55,7 @@ services:
       DB_USER: admin
       DB_PASSWORD: admin
       DB_NAME: citytwin
+      PORT: 3000
     networks:
       - smartcity-net
     depends_on:
@@ -47,7 +63,7 @@ services:
         condition: service_healthy
 
   backend-sim:
-    build: 
+    build:
       context: ./backend
       dockerfile: Dockerfile
     container_name: citytwin-backend-sim
@@ -65,7 +81,7 @@ services:
         condition: service_healthy
 
   ai-oracle:
-    build: 
+    build:
       context: ./ai-oracle
       dockerfile: Dockerfile
     container_name: citytwin-ai-oracle
@@ -86,6 +102,7 @@ services:
     networks:
       - smartcity-net
     depends_on:
+      - node-api
       - backend-sim
       - ai-oracle
 

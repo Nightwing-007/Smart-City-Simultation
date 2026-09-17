@@ -38,8 +38,8 @@ MSYS_NO_PATHCONV=1 docker run --rm \
     /osm/"$OSM_FILE"
 
 echo "Ingestion completed successfully."
-echo "Restarting Spring Boot simulation engine to build in-memory graph..."
-docker compose restart backend-sim || docker-compose restart backend-sim
+echo "Restarting Node.js and Spring Boot simulation engines to build in-memory graphs from PostGIS..."
+docker compose restart node-api backend-sim || docker-compose restart node-api backend-sim
 
 echo "=========================================================="
 echo " Ready! Open http://localhost in your browser.            "

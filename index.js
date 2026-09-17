@@ -1,10 +1,8 @@
 const express = require('express');
 const { Pool } = require('pg');
 const http = require('http');
-const fs = require('fs');
-const path = require('path');
 const WebSocket = require('ws');
-const { simulateTick } = require('./simulation');
+const { initSimulation, reloadSimulationGraph, simulateTick, getNodes } = require('./simulation');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -24,20 +22,29 @@ app.use((req, res, next) => {
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
+// PostgreSQL connection pool (resolves container hostname 'db' in Docker network)
 const pool = new Pool({
   user: process.env.DB_USER || 'admin',
   host: process.env.DB_HOST || 'localhost',
   database: process.env.DB_NAME || 'citytwin',
   password: process.env.DB_PASSWORD || 'admin',
   port: parseInt(process.env.DB_PORT || '5432', 10),
-  connectionTimeoutMillis: 2000
+  connectionTimeoutMillis: 5000
 });
 
+// Health check endpoint
 app.get('/health', (req, res) => {
-  res.json({ status: 'UP', service: 'citytwin-node-api', timestamp: new Date().toISOString() });
+  const nodeCount = getNodes ? getNodes().length : 0;
+  res.json({
+    status: 'UP',
+    service: 'citytwin-node-api',
+    graphNodes: nodeCount,
+    dbHost: process.env.DB_HOST || 'localhost',
+    timestamp: new Date().toISOString()
+  });
 });
 
-// Spatial Roads Endpoint with PostGIS query & static fallback
+// Real PostGIS Spatial Road Network Endpoint (Transforms EPSG:3857 to standard WGS84 EPSG:4326)
 app.get('/api/roads', async (req, res) => {
   try {
     const query = `
@@ -48,37 +55,44 @@ app.get('/api/roads', async (req, res) => {
       FROM (
         SELECT jsonb_build_object(
           'type',       'Feature',
+          'id',         COALESCE(osm_id::text, 'road-' || ctid::text),
           'geometry',   ST_AsGeoJSON(ST_Transform(way, 4326))::jsonb,
-          'properties', to_jsonb(inputs) - 'way'
+          'properties', jsonb_build_object(
+            'id', COALESCE(osm_id::text, 'road-' || ctid::text),
+            'name', COALESCE(name, highway),
+            'highway', highway
+          )
         ) AS feature
         FROM (
-          SELECT * FROM planet_osm_line WHERE highway IS NOT NULL LIMIT 5000
+          SELECT * FROM planet_osm_line WHERE highway IS NOT NULL AND way IS NOT NULL LIMIT 5000
         ) inputs
       ) features;
     `;
     const result = await pool.query(query);
-    if (result.rows[0]?.geojson?.features?.length > 0) {
-      return res.json(result.rows[0].geojson);
-    }
+    res.json(result.rows[0]?.geojson || { type: 'FeatureCollection', features: [] });
   } catch (error) {
-    // Database offline or table not ingested yet - gracefully fallback to local spatial roads
+    console.error('[PostGIS Roads Query Error]:', error.message);
+    res.status(500).json({
+      error: 'PostGIS database unavailable or spatial table planet_osm_line not yet ingested. Run ./ingest.sh'
+    });
   }
-
-  // Fallback to mockRoads.json
-  try {
-    const fallbackPath = path.join(__dirname, 'frontend', 'src', 'data', 'mockRoads.json');
-    if (fs.existsSync(fallbackPath)) {
-      const fallbackData = JSON.parse(fs.readFileSync(fallbackPath, 'utf8'));
-      return res.json(fallbackData);
-    }
-  } catch (err) {
-    console.error('Error reading fallback roads:', err.message);
-  }
-
-  res.json({ type: 'FeatureCollection', features: [] });
 });
 
-// WebSocket connection lifecycle
+// Endpoint to reload graph after new OSM ingestion
+app.post('/api/reload', async (req, res) => {
+  try {
+    await reloadSimulationGraph(pool);
+    res.json({
+      success: true,
+      message: 'Spatial graph successfully reloaded from PostGIS database.',
+      nodesCount: getNodes().length
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// WebSocket initial frame
 wss.on('connection', (ws) => {
   try {
     const initialData = simulateTick();
@@ -88,7 +102,7 @@ wss.on('connection', (ws) => {
   }
 });
 
-// Broadcast simulation loop (100ms / 10 FPS)
+// 100ms Broadcast Loop
 setInterval(() => {
   try {
     const simData = simulateTick();
@@ -103,7 +117,19 @@ setInterval(() => {
   }
 }, 100);
 
-server.listen(port, () => {
-  console.log(`Node Ingestion & Simulation API running at http://localhost:${port}`);
-  console.log(`WebSocket Stream active at ws://localhost:${port}`);
-});
+// Initialize simulation from PostGIS and start server
+async function start() {
+  try {
+    await initSimulation(pool);
+  } catch (err) {
+    console.warn('[Warning] Could not initialize graph from PostGIS immediately (DB may still be booting). Will retry on request.');
+  }
+
+  server.listen(port, () => {
+    console.log(`Node Ingestion & Simulation API running at http://localhost:${port}`);
+    console.log(`WebSocket Stream active at ws://localhost:${port}`);
+    console.log(`Connected to PostGIS host: ${process.env.DB_HOST || 'localhost'}:${process.env.DB_PORT || 5432}`);
+  });
+}
+
+start();
