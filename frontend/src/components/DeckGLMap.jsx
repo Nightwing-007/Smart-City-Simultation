@@ -71,7 +71,7 @@ const DeckGLMap = ({
     fetchRoads();
   }, []);
 
-  // Dual-mode Simulation Loop: Node API (3000) / Spring Boot (8082) WebSocket + Standalone Fallback
+  // Real-Time Simulation Stream: Node.js WebSocket (ws://localhost:3000) + Standalone Physics Fallback
   useEffect(() => {
     let ws = null;
     let localInterval = null;
@@ -195,7 +195,7 @@ const DeckGLMap = ({
       }
     };
 
-    tryConnect(['ws://localhost:3000', 'ws://localhost:8082/ws/simulation']);
+    tryConnect(['ws://localhost:3000']);
 
     return () => {
       isCleanedUp = true;

@@ -2,3 +2,5 @@ pandas
 scikit-learn
 fastapi
 uvicorn
+psycopg2-binary
+sqlalchemy

@@ -24,11 +24,11 @@ const wss = new WebSocket.Server({ server });
 
 // PostgreSQL connection pool (resolves container hostname 'db' in Docker network)
 const pool = new Pool({
-  user: process.env.DB_USER || 'admin',
-  host: process.env.DB_HOST || 'localhost',
-  database: process.env.DB_NAME || 'citytwin',
-  password: process.env.DB_PASSWORD || 'admin',
-  port: parseInt(process.env.DB_PORT || '5432', 10),
+  user: process.env.POSTGRES_USER || process.env.DB_USER || 'admin',
+  host: process.env.POSTGRES_HOST || process.env.DB_HOST || 'localhost',
+  database: process.env.POSTGRES_DB || process.env.DB_NAME || 'citytwin',
+  password: process.env.POSTGRES_PASSWORD || process.env.DB_PASSWORD || 'admin',
+  port: parseInt(process.env.POSTGRES_PORT || process.env.DB_PORT || '5432', 10),
   connectionTimeoutMillis: 5000
 });
 

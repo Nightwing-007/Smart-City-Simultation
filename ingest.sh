@@ -1,10 +1,22 @@
 #!/bin/bash
 set -e
 
+# Load environment variables from .env if present
+if [ -f .env ]; then
+    export $(grep -v '^#' .env | xargs)
+fi
+
+DB_USER=${POSTGRES_USER:-"admin"}
+DB_PASS=${POSTGRES_PASSWORD:-"admin"}
+DB_NAME=${POSTGRES_DB:-"citytwin"}
+DB_HOST=${POSTGRES_HOST:-"db"}
+DB_PORT=${POSTGRES_PORT:-"5432"}
+
 CITY=${1:-"monaco"}
 echo "=========================================================="
 echo " Smart City Digital Twin - PostGIS OSM Spatial Ingestion  "
 echo " Target City / Extract: $CITY                             "
+echo " Database Target: $DB_USER@$DB_HOST:$DB_PORT/$DB_NAME     "
 echo "=========================================================="
 
 if [ "$CITY" == "newyork" ] || [ "$CITY" == "nyc" ]; then
@@ -34,12 +46,12 @@ MSYS_NO_PATHCONV=1 docker run --rm \
     --network=smartcity-net \
     -v "${PWD}:/osm" \
     iboates/osm2pgsql:latest \
-    -c -d postgresql://admin:admin@db:5432/citytwin \
+    -c -d "postgresql://${DB_USER}:${DB_PASS}@${DB_HOST}:${DB_PORT}/${DB_NAME}" \
     /osm/"$OSM_FILE"
 
 echo "Ingestion completed successfully."
-echo "Restarting Node.js and Spring Boot simulation engines to build in-memory graphs from PostGIS..."
-docker compose restart node-api backend-sim || docker-compose restart node-api backend-sim
+echo "Restarting Node.js simulation API to rebuild spatial in-memory graph from PostGIS..."
+docker compose restart node-api || docker-compose restart node-api
 
 echo "=========================================================="
 echo " Ready! Open http://localhost in your browser.            "

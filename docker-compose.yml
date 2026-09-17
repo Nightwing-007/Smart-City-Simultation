@@ -11,17 +11,17 @@ services:
     container_name: citytwin-db
     restart: unless-stopped
     environment:
-      POSTGRES_USER: admin
-      POSTGRES_PASSWORD: admin
-      POSTGRES_DB: citytwin
+      POSTGRES_USER: ${POSTGRES_USER:-admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-admin}
+      POSTGRES_DB: ${POSTGRES_DB:-citytwin}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     networks:
       - smartcity-net
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U admin -d citytwin"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-admin} -d ${POSTGRES_DB:-citytwin}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -37,7 +37,12 @@ services:
       db:
         condition: service_healthy
     entrypoint: ["osm2pgsql"]
-    command: ["-c", "-d", "postgresql://admin:admin@db:5432/citytwin", "/osm/NewYork.osm.pbf"]
+    command: [
+      "-c",
+      "-d",
+      "postgresql://${POSTGRES_USER:-admin}:${POSTGRES_PASSWORD:-admin}@${POSTGRES_HOST:-db}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-citytwin}",
+      "/osm/NewYork.osm.pbf"
+    ]
     profiles:
       - ingest
 
@@ -48,32 +53,14 @@ services:
     container_name: citytwin-node-api
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "${PORT:-3000}:3000"
     environment:
-      DB_HOST: db
-      DB_PORT: 5432
-      DB_USER: admin
-      DB_PASSWORD: admin
-      DB_NAME: citytwin
-      PORT: 3000
-    networks:
-      - smartcity-net
-    depends_on:
-      db:
-        condition: service_healthy
-
-  backend-sim:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: citytwin-backend-sim
-    restart: unless-stopped
-    ports:
-      - "8082:8082"
-    environment:
-      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/citytwin
-      SPRING_DATASOURCE_USERNAME: admin
-      SPRING_DATASOURCE_PASSWORD: admin
+      POSTGRES_HOST: ${POSTGRES_HOST:-db}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_USER: ${POSTGRES_USER:-admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-admin}
+      POSTGRES_DB: ${POSTGRES_DB:-citytwin}
+      PORT: ${PORT:-3000}
     networks:
       - smartcity-net
     depends_on:
@@ -88,8 +75,17 @@ services:
     restart: unless-stopped
     ports:
       - "8000:8000"
+    environment:
+      POSTGRES_HOST: ${POSTGRES_HOST:-db}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_USER: ${POSTGRES_USER:-admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-admin}
+      POSTGRES_DB: ${POSTGRES_DB:-citytwin}
     networks:
       - smartcity-net
+    depends_on:
+      db:
+        condition: service_healthy
 
   frontend:
     build:
@@ -103,7 +99,6 @@ services:
       - smartcity-net
     depends_on:
       - node-api
-      - backend-sim
       - ai-oracle
 
 volumes:
