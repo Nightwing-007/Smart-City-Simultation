@@ -111,7 +111,7 @@ const Sidebar = ({
         <div className="status-badge-row">
           <span className={`connection-pill ${connectionStatus}`}>
             <span className="pulsing-dot" />
-            {connectionStatus === 'connected' ? 'Spring Boot WebSocket: Live' : 'Local Physics Engine: Active'}
+            {connectionStatus === 'connected' ? 'Simulation WebSocket: Live' : 'Local Physics Engine: Active'}
           </span>
           <span
             className="scenario-pill"

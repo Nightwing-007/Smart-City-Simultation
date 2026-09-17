@@ -71,21 +71,23 @@ const DeckGLMap = ({
     fetchRoads();
   }, []);
 
-  // Dual-mode Simulation Loop: Spring Boot WebSocket + Standalone Fallback
+  // Dual-mode Simulation Loop: Node API (3000) / Spring Boot (8082) WebSocket + Standalone Fallback
   useEffect(() => {
     let ws = null;
     let localInterval = null;
+    let isCleanedUp = false;
 
     const startLocalSimulation = () => {
+      if (isCleanedUp) return;
       if (localInterval) clearInterval(localInterval);
       onConnectionStatusChange?.('standalone');
 
       localInterval = setInterval(() => {
         if (localSimRef.current) {
           const simData = localSimRef.current.tick();
-          setVehicles(simData.vehicles);
-          setPollution(simData.pollution);
-          setAmbulancePath(simData.ambulancePath);
+          setVehicles(simData.vehicles || []);
+          setPollution(simData.pollution || []);
+          setAmbulancePath(simData.ambulancePath || []);
 
           // Calculate KPI metrics
           const avgSpeed =
@@ -98,56 +100,105 @@ const DeckGLMap = ({
 
           const maxPollution =
             simData.pollution.length > 0
-              ? Math.max(...simData.pollution.map((p) => p.weight))
+              ? Math.max(...simData.pollution.map((p) => p.weight || p.pollutionIndex || 25))
               : 25;
 
           onStatsUpdate?.({
             vehicleCount: simData.vehicles.length,
             avgSpeed: `${avgSpeed} mph`,
             aqiIndex: Math.round(maxPollution * 1.3),
-            emergencyStatus: simData.ambulancePath.length > 0 ? 'Active Route' : 'Standby'
+            emergencyStatus: simData.ambulancePath && simData.ambulancePath.length > 0 ? 'Active Route' : 'Standby'
           });
         }
       }, 100);
     };
 
-    try {
-      ws = new WebSocket('ws://localhost:8082/ws/simulation');
-
-      ws.onopen = () => {
-        isWsConnectedRef.current = true;
-        onConnectionStatusChange?.('connected');
-        if (localInterval) clearInterval(localInterval);
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.vehicles) {
-            setVehicles(data.vehicles);
-          }
-          if (data.pollution) {
-            setPollution(data.pollution);
-          }
-        } catch (err) {
-          console.error('Failed to parse WebSocket simulation payload:', err);
+    const handleMessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.vehicles) {
+          setVehicles(data.vehicles);
         }
-      };
+        if (data.pollution) {
+          setPollution(data.pollution);
+        }
+        if (data.ambulancePath) {
+          setAmbulancePath(data.ambulancePath);
+        } else if (data.ambulance && data.ambulance.path) {
+          setAmbulancePath(data.ambulance.path);
+        }
 
-      ws.onerror = () => {
-        isWsConnectedRef.current = false;
-        startLocalSimulation();
-      };
+        if (data.vehicles && data.vehicles.length > 0) {
+          const avgSpeed = (
+            data.vehicles.reduce((acc, v) => acc + parseFloat(v.speed || 25), 0) /
+            data.vehicles.length
+          ).toFixed(1);
 
-      ws.onclose = () => {
-        isWsConnectedRef.current = false;
+          const maxPollution =
+            data.pollution && data.pollution.length > 0
+              ? Math.max(...data.pollution.map((p) => p.weight || p.pollutionIndex || 25))
+              : 25;
+
+          const hasAmbulance =
+            data.vehicles.some((v) => v.isAmbulance) || !!data.ambulance;
+
+          onStatsUpdate?.({
+            vehicleCount: data.vehicles.length,
+            avgSpeed: `${avgSpeed} mph`,
+            aqiIndex: Math.round(maxPollution * 1.3),
+            emergencyStatus: hasAmbulance ? 'A* En Route' : 'Standby'
+          });
+        }
+      } catch (err) {
+        console.error('Failed to parse WebSocket simulation payload:', err);
+      }
+    };
+
+    const tryConnect = (urls, index = 0) => {
+      if (isCleanedUp) return;
+      if (index >= urls.length) {
         startLocalSimulation();
-      };
-    } catch {
-      startLocalSimulation();
-    }
+        return;
+      }
+
+      const url = urls[index];
+      try {
+        const socket = new WebSocket(url);
+
+        socket.onopen = () => {
+          if (isCleanedUp) {
+            socket.close();
+            return;
+          }
+          ws = socket;
+          isWsConnectedRef.current = true;
+          onConnectionStatusChange?.('connected');
+          if (localInterval) clearInterval(localInterval);
+        };
+
+        socket.onmessage = handleMessage;
+
+        socket.onerror = () => {
+          if (!isWsConnectedRef.current) {
+            tryConnect(urls, index + 1);
+          }
+        };
+
+        socket.onclose = () => {
+          if (ws === socket) {
+            isWsConnectedRef.current = false;
+            startLocalSimulation();
+          }
+        };
+      } catch {
+        tryConnect(urls, index + 1);
+      }
+    };
+
+    tryConnect(['ws://localhost:3000', 'ws://localhost:8082/ws/simulation']);
 
     return () => {
+      isCleanedUp = true;
       if (ws) ws.close();
       if (localInterval) clearInterval(localInterval);
     };

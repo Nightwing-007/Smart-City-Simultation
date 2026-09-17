@@ -1,6 +1,8 @@
 const express = require('express');
 const { Pool } = require('pg');
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
 const WebSocket = require('ws');
 const { simulateTick } = require('./simulation');
 
@@ -28,12 +30,14 @@ const pool = new Pool({
   database: process.env.DB_NAME || 'citytwin',
   password: process.env.DB_PASSWORD || 'admin',
   port: parseInt(process.env.DB_PORT || '5432', 10),
+  connectionTimeoutMillis: 2000
 });
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'UP', service: 'citytwin-node-api' });
+  res.json({ status: 'UP', service: 'citytwin-node-api', timestamp: new Date().toISOString() });
 });
 
+// Spatial Roads Endpoint with PostGIS query & static fallback
 app.get('/api/roads', async (req, res) => {
   try {
     const query = `
@@ -53,18 +57,42 @@ app.get('/api/roads', async (req, res) => {
       ) features;
     `;
     const result = await pool.query(query);
-    res.json(result.rows[0]?.geojson || { type: 'FeatureCollection', features: [] });
+    if (result.rows[0]?.geojson?.features?.length > 0) {
+      return res.json(result.rows[0].geojson);
+    }
   } catch (error) {
-    console.error('Database query error:', error.message);
-    res.status(500).json({ error: 'Database unavailable or table not yet ingested. Run ./ingest.sh' });
+    // Database offline or table not ingested yet - gracefully fallback to local spatial roads
+  }
+
+  // Fallback to mockRoads.json
+  try {
+    const fallbackPath = path.join(__dirname, 'frontend', 'src', 'data', 'mockRoads.json');
+    if (fs.existsSync(fallbackPath)) {
+      const fallbackData = JSON.parse(fs.readFileSync(fallbackPath, 'utf8'));
+      return res.json(fallbackData);
+    }
+  } catch (err) {
+    console.error('Error reading fallback roads:', err.message);
+  }
+
+  res.json({ type: 'FeatureCollection', features: [] });
+});
+
+// WebSocket connection lifecycle
+wss.on('connection', (ws) => {
+  try {
+    const initialData = simulateTick();
+    ws.send(JSON.stringify(initialData));
+  } catch (err) {
+    console.error('Initial WebSocket frame error:', err.message);
   }
 });
 
-// Broadcast loop
+// Broadcast simulation loop (100ms / 10 FPS)
 setInterval(() => {
   try {
-    const vehicleData = simulateTick();
-    const payload = JSON.stringify(vehicleData);
+    const simData = simulateTick();
+    const payload = JSON.stringify(simData);
     wss.clients.forEach((client) => {
       if (client.readyState === WebSocket.OPEN) {
         client.send(payload);
@@ -76,6 +104,6 @@ setInterval(() => {
 }, 100);
 
 server.listen(port, () => {
-  console.log(`Node Ingestion API running at http://localhost:${port}`);
-  console.log(`Database connected to host: ${process.env.DB_HOST || 'localhost'}:${process.env.DB_PORT || 5432}`);
+  console.log(`Node Ingestion & Simulation API running at http://localhost:${port}`);
+  console.log(`WebSocket Stream active at ws://localhost:${port}`);
 });
